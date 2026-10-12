@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube 视频标题复制器",
+  "version": "2.0.0",
+  "description": "在 YouTube 上复制视频标题，并在播放页截取当前画面或把正在播放的视频保存到电脑。",
+  "permissions": ["clipboardWrite"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "YouTube 视频标题复制器",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["shared.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'none'"
+  }
+}

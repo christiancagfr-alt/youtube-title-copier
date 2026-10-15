@@ -54,9 +54,12 @@ test('videoIdFromUrl only accepts YouTube https links', () => {
 
 test('extension manifest stays narrow', () => {
   const manifest = JSON.parse(readFileSync(root + 'manifest.json', 'utf8'));
-  assert.deepEqual(manifest.permissions, ['clipboardWrite']);
+  assert.deepEqual(manifest.permissions, ['clipboardWrite', 'nativeMessaging']);
   assert.equal(manifest.host_permissions, undefined);
   assert.equal(manifest.optional_host_permissions, undefined);
+  assert.equal(manifest.background.service_worker, 'background.js');
+  assert.equal(typeof manifest.key, 'string');
+  assert.ok(manifest.key.length > 100);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://www.youtube.com/*']);
   assert.equal(manifest.content_scripts[0].all_frames, undefined);
   assert.equal(manifest.web_accessible_resources, undefined);
@@ -75,7 +78,7 @@ test('extension source does not load or execute remote code', () => {
     /outerHTML/,
     /insertAdjacentHTML/,
     /document\.write/,
-    /postMessage\s*\(/,
+    /window\.postMessage\s*\(/,
     /javascript:/,
     /http:\/\//,
     /<all_urls>/,
@@ -88,4 +91,30 @@ test('extension source does not load or execute remote code', () => {
     assert.equal(pattern.test(source), false, pattern);
   }
   assert.match(read('../content.js'), /yt-lockup-view-model/);
+  const content = read('../content.js');
+  assert.equal(/MediaRecorder|captureStream|showSaveFilePicker/.test(content), false);
+  assert.equal(/addEventListener\(\s*['"]message['"]/.test(content), false);
+});
+
+test('background only forwards a video id to the local host', () => {
+  const source = read('../background.js');
+  assert.match(source, /var HOST = 'com\.youtubetitles\.downloader'/);
+  assert.match(source, /connectNative\(HOST\)/);
+  assert.match(source, /importScripts\('shared\.js'\)/);
+  assert.equal(/\beval\s*\(/.test(source), false);
+  assert.equal(/innerHTML/.test(source), false);
+  assert.equal(/http:\/\//.test(source), false);
+  assert.equal(/<all_urls>/.test(source), false);
+  assert.equal(/cookies/i.test(source), false);
+  assert.equal(/signatureCipher/.test(source), false);
+});
+
+test('download host does not shell out or read browser cookies', () => {
+  const source = read('../host/download_host.py');
+  assert.equal(/shell\s*=\s*True/.test(source), false);
+  assert.equal(/os\.system\(/.test(source), false);
+  assert.equal(/cookies-from-browser/.test(source), false);
+  assert.equal(/subprocess/.test(source), false);
+  assert.match(source, /noplaylist/);
+  assert.match(source, /watch\?v=/);
 });

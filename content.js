@@ -20,23 +20,19 @@
   var CAMERA_PATH = 'M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 13a4 4 0 1 1 4-4 4 4 0 0 1-4 4z';
   var DOWN_PATH = 'M19 20H5v-2h14v2zM11 4h2v8h3l-4 4-4-4h3V4z';
   var SVG_NS = 'http://www.w3.org/2000/svg';
-  var MAX_RECORD_BYTES = 4 * 1024 * 1024 * 1024;
-  var MAX_MEMORY_BYTES = 150 * 1024 * 1024;
   var MAX_FRAME = 7680;
 
   var watchHost = null;
-  var ui = null;
   var toastNode = null;
   var toastTimer = 0;
   var scanTimer = 0;
-  var record = {
-    busy: false,
-    recorder: null,
-    chunks: [],
-    detach: null,
-    timer: 0,
-    elapsed: 0,
-    tickAt: 0
+  var download = {
+    port: null,
+    button: null,
+    stop: null,
+    status: null,
+    text: '',
+    cancelled: false
   };
 
   function stopEvent(event) {
@@ -88,7 +84,7 @@
     return tools.cleanTitle(String(document.title || '').replace(/\s*-\s*YouTube\s*$/, ''));
   }
 
-  function toast(message) {
+  function toast(message, duration) {
     if (!toastNode || !toastNode.isConnected) {
       toastNode = document.createElement('div');
       toastNode.className = 'yt-tools-toast';
@@ -111,7 +107,7 @@
     toastTimer = setTimeout(function () {
       if (toastNode) toastNode.remove();
       toastNode = null;
-    }, 1800);
+    }, duration || 1800);
   }
 
   function copyWithTextarea(text) {
@@ -267,7 +263,7 @@
   function saveBlob(blob, filename) {
     if (!blob || !filename) return;
     var type = blob.type || '';
-    if (type !== 'image/png' && type.indexOf('video/webm') !== 0) {
+    if (type !== 'image/png') {
       toast('无法保存这个文件');
       return;
     }
@@ -318,229 +314,80 @@
     }
   }
 
-  function clock(ms) {
-    var total = Math.max(0, Math.floor(ms / 1000));
-    var seconds = total % 60;
-    var minutes = Math.floor(total / 60) % 60;
-    var hours = Math.floor(total / 3600);
-    function pad(n) { return (n < 10 ? '0' : '') + n; }
-    if (hours > 0) return hours + ':' + pad(minutes) + ':' + pad(seconds);
-    return pad(minutes) + ':' + pad(seconds);
+  function setStatus(text) {
+    download.text = text || '';
+    if (download.status) download.status.textContent = download.text;
   }
 
-  function pickMime() {
-    var types = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-    if (!window.MediaRecorder) return '';
-    for (var i = 0; i < types.length; i++) {
-      if (MediaRecorder.isTypeSupported(types[i])) return types[i];
+  function syncDownloadControls() {
+    var busy = !!download.port;
+    if (download.button) download.button.disabled = busy;
+    if (download.stop) download.stop.hidden = !busy;
+  }
+
+  function finishDownload() {
+    download.port = null;
+    download.cancelled = false;
+    syncDownloadControls();
+  }
+
+  function beginDownload() {
+    if (download.port) {
+      toast('正在下载');
+      return;
     }
-    return '';
-  }
-
-  function createRecorder(stream, mime, height) {
-    var options = {
-      videoBitsPerSecond: height >= 1080 ? 6000000 : height >= 720 ? 4000000 : 2500000
-    };
-    if (mime) options.mimeType = mime;
+    var id = tools.videoIdFromUrl(location.href, location.origin);
+    if (!id) {
+      toast('这个页面没有可下载的视频');
+      return;
+    }
+    if (!chrome.runtime || !chrome.runtime.connect) {
+      toast('请重新加载扩展');
+      return;
+    }
+    var port;
     try {
-      return new MediaRecorder(stream, options);
+      port = chrome.runtime.connect({ name: 'yt-download' });
     } catch (error) {
-      return new MediaRecorder(new MediaStream(stream.getVideoTracks()), options);
+      toast('无法连接下载组件');
+      return;
     }
-  }
-
-  function cleanupRecording() {
-    if (record.detach) record.detach();
-    clearInterval(record.timer);
-    record.busy = false;
-    record.recorder = null;
-    record.chunks = [];
-    record.detach = null;
-    record.timer = 0;
-    record.elapsed = 0;
-    if (ui) {
-      ui.idle.hidden = false;
-      ui.active.hidden = true;
-    }
-  }
-
-  function finishRecording() {
-    var recorder = record.recorder;
-    if (!recorder || recorder.state === 'inactive') return;
-    try { recorder.requestData(); } catch (error) {}
-    try { recorder.stop(); } catch (error) {}
-  }
-
-  function armRecorder(video, recorder, writable, filename) {
-    record.recorder = recorder;
-    record.chunks = [];
-    record.elapsed = 0;
-    record.tickAt = Date.now();
-    var total = 0;
-    var chain = Promise.resolve();
+    download.port = port;
+    download.cancelled = false;
+    syncDownloadControls();
+    setStatus('正在连接本机 yt-dlp…');
     var settled = false;
-    var cap = writable ? MAX_RECORD_BYTES : MAX_MEMORY_BYTES;
-
-    function done() {
-      if (settled) return;
-      settled = true;
-      chain.then(function () {
-        if (writable) return writable.close();
-      }).then(function () {
-        if (writable) {
-          toast('已保存视频');
-          return;
-        }
-        var blob = new Blob(record.chunks, { type: 'video/webm' });
-        if (blob.size < 1000) {
-          toast('没有录到内容');
-          return;
-        }
-        saveBlob(blob, filename);
-        toast('已保存视频');
-      }).catch(function () {
-        toast('保存失败');
-      }).then(cleanupRecording);
-    }
-
-    recorder.ondataavailable = function (event) {
-      var chunk = event.data;
-      if (!chunk || !chunk.size) return;
-      total += chunk.size;
-      if (writable) chain = chain.then(function () { return writable.write(chunk); });
-      else record.chunks.push(chunk);
-      if (total >= cap) {
-        toast('已达到大小上限，先保存这一段');
-        finishRecording();
-      }
-    };
-    recorder.onerror = function () {
-      toast('录制中断');
-      try { recorder.stop(); } catch (error) { done(); }
-    };
-    recorder.onstop = done;
-
-    var armedAt = Date.now();
-    function onPause() {
-      if (Date.now() - armedAt < 800) return;
-      if (recorder.state === 'recording') recorder.pause();
-    }
-    function onPlay() {
-      if (recorder.state === 'paused') recorder.resume();
-    }
-    function onEnded() { finishRecording(); }
-    video.addEventListener('pause', onPause);
-    video.addEventListener('play', onPlay);
-    if (Number.isFinite(video.duration)) video.addEventListener('ended', onEnded);
-    record.detach = function () {
-      video.removeEventListener('pause', onPause);
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('ended', onEnded);
-    };
-
-    try {
-      recorder.start(1000);
-    } catch (error) {
-      settled = true;
-      if (writable && writable.abort) writable.abort().catch(function () {});
-      cleanupRecording();
-      toast('无法开始录制');
-      return;
-    }
-    if (ui) {
-      ui.panel.hidden = false;
-      ui.idle.hidden = true;
-      ui.active.hidden = false;
-      ui.status.textContent = '正在录制 00:00';
-    }
-    record.timer = setInterval(function () {
-      if (recorder.state === 'recording') record.elapsed += Date.now() - record.tickAt;
-      record.tickAt = Date.now();
-      if (ui) ui.status.textContent = '正在录制 ' + clock(record.elapsed);
-    }, 500);
-  }
-
-  function seekStart(video) {
-    if (!Number.isFinite(video.duration) || video.currentTime < 0.25) return Promise.resolve();
-    return new Promise(function (resolve) {
-      var settled = false;
-      function done() {
-        if (settled) return;
-        settled = true;
-        video.removeEventListener('seeked', done);
-        resolve();
-      }
-      video.addEventListener('seeked', done);
-      try { video.currentTime = 0; } catch (error) { done(); }
-      setTimeout(done, 1500);
-    });
-  }
-
-  function startRecorder(video, fromStart, handle, filename) {
-    var stream;
-    try {
-      stream = video.captureStream();
-    } catch (error) {
-      record.busy = false;
-      toast('无法读取播放中的视频');
-      return;
-    }
-    var mediaRecorder;
-    try {
-      mediaRecorder = createRecorder(stream, pickMime(), video.videoHeight || 0);
-    } catch (error) {
-      record.busy = false;
-      toast('无法开始录制');
-      return;
-    }
-    var writablePromise = handle ? handle.createWritable() : Promise.resolve(null);
-    writablePromise.then(function (writable) {
-      var prepare = fromStart ? seekStart(video) : Promise.resolve();
-      return prepare.then(function () {
-        return video.play();
-      }).then(function () {
-        armRecorder(video, mediaRecorder, writable, filename);
-      }, function () {
-        record.busy = false;
-        if (writable && writable.abort) writable.abort().catch(function () {});
-        toast('请先点一下播放器再保存');
-      });
-    }).catch(function () {
-      record.busy = false;
-      toast('无法创建保存文件');
-    });
-  }
-
-  function beginRecording(fromStart) {
-    if (record.recorder || record.busy) return;
-    var video = mainVideo();
-    if (!video) {
-      toast('请先播放视频');
-      return;
-    }
-    if (isAd()) {
-      toast('请等广告结束后再操作');
-      return;
-    }
-    record.busy = true;
-    var suggested = tools.sanitizeFilename(watchTitle() || 'youtube-video', 'webm');
-    var request;
-    if (typeof showSaveFilePicker === 'function') {
-      request = showSaveFilePicker({
-        suggestedName: suggested,
-        types: [{ description: 'WebM 视频', accept: { 'video/webm': ['.webm'] } }]
-      });
-    } else {
-      request = Promise.resolve(null);
-    }
-    request.then(function (handle) {
-      startRecorder(video, fromStart, handle, suggested);
-    }).catch(function (error) {
-      if (error && error.name === 'AbortError') {
-        record.busy = false;
+    port.onMessage.addListener(function (msg) {
+      if (!msg) return;
+      if (msg.type === 'progress') {
+        var text = msg.message || '正在下载';
+        if (typeof msg.percent === 'number') text = '正在下载 ' + msg.percent + '%';
+        setStatus(text);
         return;
       }
-      startRecorder(video, fromStart, null, suggested);
+      if (msg.type === 'done') {
+        settled = true;
+        setStatus('已保存到 ' + (msg.path || '下载文件夹'));
+        toast('视频已下载', 2400);
+        return;
+      }
+      if (msg.type === 'error') {
+        settled = true;
+        setStatus(msg.message || '下载失败');
+        toast(msg.message || '下载失败', 4000);
+      }
+    });
+    port.onDisconnect.addListener(function () {
+      var cancelled = download.cancelled;
+      finishDownload();
+      if (settled || cancelled) return;
+      setStatus('下载中断。如果这是第一次使用，请先运行 install-host.ps1。');
+      toast('请先安装本机下载组件', 4000);
+    });
+    port.postMessage({
+      type: 'download',
+      videoId: id,
+      title: watchTitle()
     });
   }
 
@@ -562,35 +409,20 @@
     host.style.setProperty('margin', '10px 0 6px', 'important');
     host.style.setProperty('pointer-events', 'auto', 'important');
     var shadow = host.attachShadow({ mode: 'open' });
-    addCss(shadow, '.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}button{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:13px/1.2 Arial,sans-serif;color:var(--yt-spec-text-primary,#0f0f0f);background:var(--yt-spec-badge-chip-background,#e8e8e8);}button:hover{filter:brightness(1.08);}button:focus-visible{outline:2px solid #e2b657;outline-offset:2px;}.panel{margin-top:8px;padding:10px;border-radius:10px;max-width:540px;background:var(--yt-spec-badge-chip-background,rgba(0,0,0,.06));color:var(--yt-spec-text-primary,#0f0f0f);font:13px/1.45 Arial,sans-serif;}.hint{margin:0 0 8px;}.status{font-weight:700;margin:0 0 8px;}');
+    addCss(shadow, '.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}button{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:13px/1.2 Arial,sans-serif;color:var(--yt-spec-text-primary,#0f0f0f);background:var(--yt-spec-badge-chip-background,#e8e8e8);}button:hover{filter:brightness(1.08);}button:focus-visible{outline:2px solid #e2b657;outline-offset:2px;}button:disabled{cursor:default;opacity:.6;}button:disabled:hover{filter:none;}.status{margin:8px 0 0;max-width:640px;word-break:break-all;font:13px/1.4 Arial,sans-serif;color:var(--yt-spec-text-secondary,#606060);}');
 
     var row = document.createElement('div');
     row.className = 'row';
     var copyButton = labeledButton('复制标题', COPY_PATH);
     var shotButton = labeledButton('截图', CAMERA_PATH);
-    var saveButton = labeledButton('保存视频', DOWN_PATH);
-    row.append(copyButton, shotButton, saveButton);
-
-    var panel = document.createElement('div');
-    panel.className = 'panel';
-    panel.hidden = true;
-    var hint = document.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = '播放器没有公开的视频文件。这里会录制正在播放的画面和声音，保存成 WebM，画质与当前播放器一致，单次最多 4GB。';
-    var idle = document.createElement('div');
-    idle.className = 'row';
-    var fromStart = labeledButton('从头录制', DOWN_PATH);
-    var fromHere = labeledButton('从这里录制', DOWN_PATH);
-    idle.append(fromStart, fromHere);
-    var active = document.createElement('div');
-    active.hidden = true;
+    var downloadButton = labeledButton('下载视频', DOWN_PATH);
+    var stopButton = labeledButton('停止', CHECK_PATH);
+    stopButton.hidden = true;
+    row.append(copyButton, shotButton, downloadButton, stopButton);
     var status = document.createElement('p');
     status.className = 'status';
-    status.textContent = '正在录制 00:00';
-    var stopButton = labeledButton('停止并保存', CHECK_PATH);
-    active.append(status, stopButton);
-    panel.append(hint, idle, active);
-    shadow.append(row, panel);
+    status.textContent = download.text;
+    shadow.append(row, status);
 
     copyButton.addEventListener('click', function (event) {
       stopEvent(event);
@@ -607,34 +439,33 @@
       stopEvent(event);
       saveFrame();
     });
-    saveButton.addEventListener('click', function (event) {
+    downloadButton.addEventListener('click', function (event) {
       stopEvent(event);
-      panel.hidden = !panel.hidden;
-    });
-    fromStart.addEventListener('click', function (event) {
-      stopEvent(event);
-      beginRecording(true);
-    });
-    fromHere.addEventListener('click', function (event) {
-      stopEvent(event);
-      beginRecording(false);
+      beginDownload();
     });
     stopButton.addEventListener('click', function (event) {
       stopEvent(event);
-      finishRecording();
+      if (!download.port) return;
+      download.cancelled = true;
+      setStatus('已停止');
+      download.port.disconnect();
     });
 
-    ui = { panel: panel, idle: idle, active: active, status: status };
+    download.button = downloadButton;
+    download.stop = stopButton;
+    download.status = status;
+    syncDownloadControls();
     return host;
   }
 
   function ensureWatchTools() {
     if (!tools.isPlayerPath(location.pathname)) {
-      if (record.recorder) finishRecording();
       if (watchHost) {
         watchHost.remove();
         watchHost = null;
-        ui = null;
+        download.button = null;
+        download.stop = null;
+        download.status = null;
       }
       return;
     }
@@ -674,16 +505,14 @@
     var observer = new MutationObserver(schedule);
     observer.observe(document.documentElement, { childList: true, subtree: true });
     document.addEventListener('yt-navigate-finish', function () {
-      if (record.recorder) finishRecording();
       if (watchHost) {
         watchHost.remove();
         watchHost = null;
-        ui = null;
+        download.button = null;
+        download.stop = null;
+        download.status = null;
       }
       setTimeout(scan, 300);
-    });
-    window.addEventListener('pagehide', function () {
-      if (record.recorder) finishRecording();
     });
   }
 

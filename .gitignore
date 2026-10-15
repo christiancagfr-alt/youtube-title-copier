@@ -6,3 +6,9 @@ desktop.ini
 !.env.example
 *.log
 node_modules/
+host/yt_host.exe
+host/python.path
+host/tools.json
+host/com.youtubetitles.downloader.json
+host/*.pdb
+host/__pycache__/

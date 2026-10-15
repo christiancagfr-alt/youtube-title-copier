@@ -19,6 +19,7 @@
   var CHECK_PATH = 'M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z';
   var CAMERA_PATH = 'M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 13a4 4 0 1 1 4-4 4 4 0 0 1-4 4z';
   var DOWN_PATH = 'M19 20H5v-2h14v2zM11 4h2v8h3l-4 4-4-4h3V4z';
+  var FOLDER_PATH = 'M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z';
   var SVG_NS = 'http://www.w3.org/2000/svg';
   var MAX_FRAME = 7680;
 
@@ -31,9 +32,11 @@
     button: null,
     stop: null,
     status: null,
+    folder: null,
     text: '',
     cancelled: false
   };
+  var saveDir = '';
 
   function stopEvent(event) {
     event.preventDefault();
@@ -319,6 +322,65 @@
     if (download.status) download.status.textContent = download.text;
   }
 
+  function folderLine() {
+    return saveDir ? ('保存到 ' + saveDir) : '保存到「下载」文件夹';
+  }
+
+  function showFolder() {
+    if (download.folder) download.folder.textContent = folderLine();
+  }
+
+  function sendSettings(type, done) {
+    var port;
+    try {
+      port = chrome.runtime.connect({ name: 'yt-settings' });
+    } catch (error) {
+      if (done) done(null);
+      return;
+    }
+    var settled = false;
+    port.onMessage.addListener(function (msg) {
+      settled = true;
+      if (done) done(msg);
+    });
+    port.onDisconnect.addListener(function () {
+      if (!settled && done) done(null);
+    });
+    port.postMessage({ type: type });
+  }
+
+  function refreshFolder() {
+    sendSettings('get-directory', function (msg) {
+      if (msg && msg.type === 'directory' && msg.path) {
+        saveDir = msg.path;
+        showFolder();
+      }
+    });
+  }
+
+  function chooseFolder() {
+    if (download.port) {
+      toast('下载完成后再更改保存位置');
+      return;
+    }
+    setStatus('请在弹出的窗口里选择文件夹');
+    sendSettings('pick-directory', function (msg) {
+      if (msg && msg.type === 'directory' && msg.path) {
+        saveDir = msg.path;
+        showFolder();
+        setStatus('已更新保存位置');
+        toast('已更新保存位置', 2400);
+        return;
+      }
+      setStatus('');
+      if (!msg || msg.type === 'cancelled') {
+        toast('未更改保存位置');
+        return;
+      }
+      toast((msg && msg.message) || '无法更改保存位置', 4000);
+    });
+  }
+
   function syncDownloadControls() {
     var busy = !!download.port;
     if (download.button) download.button.disabled = busy;
@@ -409,20 +471,24 @@
     host.style.setProperty('margin', '10px 0 6px', 'important');
     host.style.setProperty('pointer-events', 'auto', 'important');
     var shadow = host.attachShadow({ mode: 'open' });
-    addCss(shadow, '.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}button{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:13px/1.2 Arial,sans-serif;color:var(--yt-spec-text-primary,#0f0f0f);background:var(--yt-spec-badge-chip-background,#e8e8e8);}button:hover{filter:brightness(1.08);}button:focus-visible{outline:2px solid #e2b657;outline-offset:2px;}button:disabled{cursor:default;opacity:.6;}button:disabled:hover{filter:none;}.status{margin:8px 0 0;max-width:640px;word-break:break-all;font:13px/1.4 Arial,sans-serif;color:var(--yt-spec-text-secondary,#606060);}');
+    addCss(shadow, '.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}button{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font:13px/1.2 Arial,sans-serif;color:var(--yt-spec-text-primary,#0f0f0f);background:var(--yt-spec-badge-chip-background,#e8e8e8);}button:hover{filter:brightness(1.08);}button:focus-visible{outline:2px solid #e2b657;outline-offset:2px;}button:disabled{cursor:default;opacity:.6;}button:disabled:hover{filter:none;}.folder,.status{margin:8px 0 0;max-width:640px;word-break:break-all;font:13px/1.4 Arial,sans-serif;color:var(--yt-spec-text-secondary,#606060);}');
 
     var row = document.createElement('div');
     row.className = 'row';
     var copyButton = labeledButton('复制标题', COPY_PATH);
     var shotButton = labeledButton('截图', CAMERA_PATH);
     var downloadButton = labeledButton('下载视频', DOWN_PATH);
+    var folderButton = labeledButton('保存位置', FOLDER_PATH);
     var stopButton = labeledButton('停止', CHECK_PATH);
     stopButton.hidden = true;
-    row.append(copyButton, shotButton, downloadButton, stopButton);
+    row.append(copyButton, shotButton, downloadButton, folderButton, stopButton);
+    var folder = document.createElement('p');
+    folder.className = 'folder';
+    folder.textContent = folderLine();
     var status = document.createElement('p');
     status.className = 'status';
     status.textContent = download.text;
-    shadow.append(row, status);
+    shadow.append(row, folder, status);
 
     copyButton.addEventListener('click', function (event) {
       stopEvent(event);
@@ -443,6 +509,10 @@
       stopEvent(event);
       beginDownload();
     });
+    folderButton.addEventListener('click', function (event) {
+      stopEvent(event);
+      chooseFolder();
+    });
     stopButton.addEventListener('click', function (event) {
       stopEvent(event);
       if (!download.port) return;
@@ -454,7 +524,9 @@
     download.button = downloadButton;
     download.stop = stopButton;
     download.status = status;
+    download.folder = folder;
     syncDownloadControls();
+    if (!saveDir) refreshFolder();
     return host;
   }
 
@@ -466,6 +538,7 @@
         download.button = null;
         download.stop = null;
         download.status = null;
+        download.folder = null;
       }
       return;
     }
@@ -511,6 +584,7 @@
         download.button = null;
         download.stop = null;
         download.status = null;
+        download.folder = null;
       }
       setTimeout(scan, 300);
     });

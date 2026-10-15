@@ -1,6 +1,8 @@
 import io
+import os
 import struct
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,6 +35,24 @@ class HostLogicTest(unittest.TestCase):
         result = host.handle(message, Path.home() / "Downloads")
         self.assertEqual(result["type"], "error")
         self.assertIn("无效", result["message"])
+
+    def test_output_dir_is_chosen_locally_and_rejects_system_folders(self):
+        self.assertIsNone(host.acceptable_output_dir(Path("relative\\videos")))
+        windows = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        self.assertIsNone(host.acceptable_output_dir(windows))
+        self.assertIsNone(host.acceptable_output_dir(Path(windows.anchor)))
+        with tempfile.TemporaryDirectory() as folder:
+            cfg = Path(folder) / "outside" / "download_dir.txt"
+            # The chosen folder must already exist and must not contain the config write target.
+            chosen = Path(folder) / "videos"
+            chosen.mkdir()
+            cfg.parent.mkdir()
+            saved = host.save_output_dir(chosen, cfg)
+            self.assertEqual(host.load_output_dir(cfg), saved)
+            self.assertNotIn("outDir", Path(host.__file__).read_text(encoding="utf-8"))
+            host.reset_output_dir(cfg)
+            self.assertFalse(cfg.exists())
+            self.assertEqual(host.load_output_dir(cfg), host.default_output_dir())
 
     def test_public_error_hides_urls(self):
         text = host.public_error(RuntimeError("403 https://example.invalid/videoplayback?id=1"))

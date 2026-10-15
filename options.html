@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>下载设置</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 32px 20px;
+      background: #f4f1ea;
+      color: #1c2430;
+      font: 16px/1.5 "Segoe UI", Arial, sans-serif;
+    }
+    main {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 24px;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 8px 28px rgba(28, 36, 48, 0.08);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+    }
+    p {
+      margin: 0 0 16px;
+    }
+    .path {
+      padding: 12px;
+      border-radius: 10px;
+      background: #f6f3ec;
+      word-break: break-all;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font: 14px/1.2 "Segoe UI", Arial, sans-serif;
+      color: #1c2430;
+      background: #eadfc8;
+    }
+    button:focus-visible {
+      outline: 2px solid #e2b657;
+      outline-offset: 2px;
+    }
+    #status {
+      min-height: 1.4em;
+      color: #5c6570;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>下载保存位置</h1>
+    <p>新的视频会保存到这个文件夹。默认是「下载」。</p>
+    <p id="path" class="path">正在读取…</p>
+    <div class="row">
+      <button id="pick" type="button">选择文件夹</button>
+      <button id="reset" type="button">恢复为「下载」文件夹</button>
+    </div>
+    <p id="status"></p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

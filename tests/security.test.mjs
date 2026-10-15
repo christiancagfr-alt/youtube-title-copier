@@ -58,6 +58,8 @@ test('extension manifest stays narrow', () => {
   assert.equal(manifest.host_permissions, undefined);
   assert.equal(manifest.optional_host_permissions, undefined);
   assert.equal(manifest.background.service_worker, 'background.js');
+  assert.equal(manifest.options_ui.page, 'options.html');
+  assert.equal(manifest.options_ui.open_in_tab, true);
   assert.equal(typeof manifest.key, 'string');
   assert.ok(manifest.key.length > 100);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://www.youtube.com/*']);
@@ -107,6 +109,15 @@ test('background only forwards a video id to the local host', () => {
   assert.equal(/<all_urls>/.test(source), false);
   assert.equal(/cookies/i.test(source), false);
   assert.equal(/signatureCipher/.test(source), false);
+  assert.equal(source.includes('outDir'), false);
+  assert.match(source, /yt-settings/);
+});
+
+test('options page does not take a path from the web page', () => {
+  const source = read('../options.js');
+  assert.match(source, /pick-directory/);
+  assert.equal(/innerHTML|eval\s*\(|http:\/\//.test(source), false);
+  assert.equal(source.includes('outDir'), false);
 });
 
 test('download host does not shell out or read browser cookies', () => {

@@ -98,6 +98,8 @@ def public_error(exc: BaseException) -> str:
         return "没有可用的 Node.js，yt-dlp 无法完成下载。"
     if "unavailable" in low or "not available" in low:
         return "这个视频现在不能下载。"
+    if "not allowed" in low:
+        return "保存文件夹不可用，请重新选择。"
     return "下载失败，请稍后重试。"
 
 
@@ -149,6 +151,111 @@ def _inside(path: Path, root: Path) -> bool:
     return True
 
 
+def config_path() -> Path:
+    return Path(__file__).with_name("download_dir.txt")
+
+
+def _blocked_roots() -> list[Path]:
+    roots = []
+    for raw in (
+        os.environ.get("SystemRoot") or r"C:\Windows",
+        os.environ.get("ProgramFiles") or r"C:\Program Files",
+        os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)",
+    ):
+        try:
+            roots.append(Path(raw).resolve())
+        except OSError:
+            continue
+    return roots
+
+
+def acceptable_output_dir(path: Path) -> Path | None:
+    """Accept an existing folder the user chose. Reject system folders and drive roots."""
+    try:
+        if not path.is_absolute():
+            return None
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not resolved.is_dir():
+        return None
+    if resolved == Path(resolved.anchor):
+        return None
+    for blocked in _blocked_roots():
+        if resolved == blocked or _inside(resolved, blocked):
+            return None
+    return resolved
+
+
+def default_output_dir() -> Path:
+    downloads = Path.home() / "Downloads"
+    downloads.mkdir(exist_ok=True)
+    checked = acceptable_output_dir(downloads)
+    if checked is None:
+        raise ValueError("output directory is not allowed")
+    return checked
+
+
+def load_output_dir(config: Path | None = None) -> Path:
+    file = config_path() if config is None else config
+    if not file.is_file():
+        return default_output_dir()
+    text = file.read_text(encoding="utf-8").strip()
+    chosen = acceptable_output_dir(Path(text)) if text else None
+    if chosen is None:
+        raise ValueError("output directory is not allowed")
+    return chosen
+
+
+def save_output_dir(path: Path, config: Path | None = None) -> Path:
+    chosen = acceptable_output_dir(path)
+    if chosen is None:
+        raise ValueError("output directory is not allowed")
+    file = config_path() if config is None else config
+    file.write_text(str(chosen), encoding="utf-8")
+    return chosen
+
+
+def reset_output_dir(config: Path | None = None) -> Path:
+    file = config_path() if config is None else config
+    try:
+        file.unlink()
+    except OSError:
+        pass
+    return default_output_dir()
+
+
+def pick_output_dir(config: Path | None = None) -> Path | None:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.wm_attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    initial = default_output_dir()
+    try:
+        initial = load_output_dir(config)
+    except ValueError:
+        initial = default_output_dir()
+    selected = filedialog.askdirectory(
+        title="选择视频保存文件夹",
+        initialdir=str(initial),
+        mustexist=True,
+        parent=root,
+    )
+    root.destroy()
+    if not selected:
+        return None
+    return save_output_dir(Path(selected), config)
+
+
+def directory_message(path: Path) -> dict:
+    return {"type": "directory", "path": str(path)}
+
+
 def _looks_like_media(path: Path) -> bool:
     try:
         with path.open("rb") as handle:
@@ -191,9 +298,11 @@ def download_video(video_id: str, title: str, out_dir: Path) -> Path:
     url = watch_url(video_id)
     if not url:
         raise ValueError("bad video id")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if not _inside(out_dir, Path.home()):
-        raise ValueError("output directory is outside the user profile")
+    checked = acceptable_output_dir(out_dir)
+    if checked is None:
+        raise ValueError("output directory is not allowed")
+    out_dir = checked
+    out_dir.mkdir(exist_ok=True)
 
     try:
         from yt_dlp import YoutubeDL
@@ -285,6 +394,35 @@ def handle(message, out_dir: Path):
     return {"type": "done", "message": "已保存", "path": str(path)}
 
 
+def dispatch(message) -> dict:
+    kind = message.get("type") if isinstance(message, dict) else ""
+    if kind == "get-directory":
+        try:
+            return directory_message(load_output_dir())
+        except ValueError:
+            return {"type": "error", "message": "保存文件夹不可用，请重新选择。"}
+    if kind == "reset-directory":
+        return directory_message(reset_output_dir())
+    if kind == "pick-directory":
+        try:
+            chosen = pick_output_dir()
+        except ValueError:
+            return {"type": "error", "message": "这个文件夹不能用来保存视频。"}
+        except Exception as exc:
+            log_error(exc)
+            return {"type": "error", "message": "无法打开文件夹选择窗口。"}
+        if chosen is None:
+            return {"type": "cancelled"}
+        return directory_message(chosen)
+    if kind == "download":
+        try:
+            out_dir = load_output_dir()
+        except ValueError:
+            return {"type": "error", "message": "保存文件夹不可用，请重新选择。"}
+        return handle(message, out_dir)
+    return {"type": "error", "message": "请求无效"}
+
+
 def _watch_parent_close() -> None:
     try:
         while True:
@@ -305,11 +443,14 @@ def main() -> int:
     if message is None:
         return 1
     threading.Thread(target=_watch_parent_close, daemon=True).start()
-    out_dir = Path.home() / "Downloads"
-    result = handle(message, out_dir)
+    try:
+        result = dispatch(message)
+    except Exception as exc:
+        log_error(exc)
+        result = {"type": "error", "message": "下载失败，请稍后重试。"}
     write_message(result)
     # Skip interpreter shutdown while the stdin watcher is still blocked.
-    os._exit(0 if result.get("type") == "done" else 1)
+    os._exit(0 if result.get("type") in ("done", "directory", "cancelled") else 1)
 
 
 if __name__ == "__main__":

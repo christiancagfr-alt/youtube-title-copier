@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YouTube 视频标题复制器",
-  "version": "2.1.0",
-  "description": "在 YouTube 上复制视频标题、截取当前画面，并用本机 yt-dlp 下载可播放的视频文件。",
+  "version": "2.2.0",
+  "description": "在 YouTube 上复制视频标题、截取当前画面，并用本机 yt-dlp 把视频下载到选定文件夹。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0j8JeDm0VWcmeMwORCmn4jh75L+s19/SBqnzKqtbpkfRyoOo8KR43O4c02yVpLQXqxkee9kDdxE38hf6Fh6mhaGHBUIHDFg04o/ooO4whVEhmgcgGy1JyMOFLuYBlcgGHZRc02MikozLU/lf7E6ciEHkn95Q/hd0AX7oUntZ6Zycv+5izTIED6IMXlDsoDJLwWSzyBmmWu50SGzfFjjOk6ceovcoBZOFZABVJ4Tf9eDpYfftUC/yamwM+Nj6gbCjC7iBW/fR3/v4b5fDvvPcVppyUGmevplzEIQy20BFmg+pUat03ISvc28ogVquksjzHSZbWDMVdnJRhwQRq9NZQQIDAQAB",
   "permissions": ["clipboardWrite", "nativeMessaging"],
   "icons": {
@@ -22,6 +22,10 @@
   },
   "background": {
     "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "content_scripts": [
     {

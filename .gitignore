@@ -12,3 +12,4 @@ host/tools.json
 host/com.youtubetitles.downloader.json
 host/*.pdb
 host/__pycache__/
+host/download_dir.txt

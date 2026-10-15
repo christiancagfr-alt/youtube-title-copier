@@ -46,23 +46,29 @@ if (-not (Test-Path -LiteralPath $ffmpeg)) { throw "ffmpeg was not found." }
 $toolsJson = @{ node = $node; ffmpeg = $ffmpeg } | ConvertTo-Json -Compress
 [System.IO.File]::WriteAllText((Join-Path $hostDir 'tools.json'), $toolsJson)
 
-$manifest = Get-Content -LiteralPath $manifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
-$der = [Convert]::FromBase64String($manifest.key)
-$sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($der)
-$alphabet = 'abcdefghijklmnop'
-$id = New-Object System.Text.StringBuilder
-foreach ($b in $sha[0..15]) {
-  [void]$id.Append($alphabet.Substring(($b -shr 4), 1))
-  [void]$id.Append($alphabet.Substring(($b -band 15), 1))
+function Get-ExtensionId([byte[]]$bytes) {
+  $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+  $alphabet = 'abcdefghijklmnop'
+  $builder = New-Object System.Text.StringBuilder
+  foreach ($b in $sha[0..15]) {
+    [void]$builder.Append($alphabet.Substring(($b -shr 4), 1))
+    [void]$builder.Append($alphabet.Substring(($b -band 15), 1))
+  }
+  return $builder.ToString()
 }
-$extensionId = $id.ToString()
+
+$manifest = Get-Content -LiteralPath $manifestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+$keyId = Get-ExtensionId ([Convert]::FromBase64String($manifest.key))
+# Unpacked loads that have not picked up the key yet keep the path-based id.
+$pathId = Get-ExtensionId ([System.Text.Encoding]::Unicode.GetBytes($root))
+$origins = @("chrome-extension://$keyId/", "chrome-extension://$pathId/") | Select-Object -Unique
 $hostManifestPath = Join-Path $hostDir 'com.youtubetitles.downloader.json'
 $hostJson = @{
   name = 'com.youtubetitles.downloader'
   description = 'Local yt-dlp host for the YouTube title copier extension'
   path = $exe
   type = 'stdio'
-  allowed_origins = @("chrome-extension://$extensionId/")
+  allowed_origins = @($origins)
 } | ConvertTo-Json
 [System.IO.File]::WriteAllText($hostManifestPath, $hostJson)
 
@@ -78,5 +84,5 @@ foreach ($name in $registryKeys) {
 }
 
 Write-Output "Installed native host."
-Write-Output "Extension id: $extensionId"
+Write-Output "Extension ids: $($origins -join ', ')"
 Write-Output "Reload the unpacked extension at chrome://extensions."
